@@ -1,5 +1,83 @@
 # electroPioreactor Plugin — Changelog
 
+## Unreleased - install-doc corrections (leader/worker, PWM 4, versions)
+
+Covers the docs landed in a1d2708 (PR #26) plus the review pass over it.
+No runtime behaviour change to the plugin itself.
+
+- **Corrected the worker admonition added in a1d2708.** Two of its claims
+  were wrong when checked against Pioreactor 26.5.0's own source. (a) The UI
+  job descriptor does *not* reach a worker "through the cluster": each unit
+  serves its own descriptors, and the leader proxies
+  `/api/workers/<unit>/jobs/descriptors` to that worker's `/unit_api`, which
+  reads that worker's own `plugins/ui/jobs/`. The add-worker script scps only
+  `config.ini`, and `47_update_distribute_ui_assets_to_workers.sh` rsyncs only
+  `~/.pioreactor/ui` (built-ins), never `plugins/ui/`. So a worker told to skip
+  step 3 never shows electroPioreactor under Activities. (b) "A worker has no
+  web UI of its own" is wrong - `50-pioreactorui.conf` has no leader/worker
+  branch, so workers serve `/unit_api` and steps 5 and 6 work there. The note
+  now says: add the unit to the cluster first, run step 3 on **every** unit
+  that will run the job, run step 4 on the **leader only** (config.ini is
+  leader-owned and worker-side edits are overwritten by the next sync),
+  followed by `pios sync-configs --shared` when workers are already joined,
+  and treat steps 5-6 as safe anywhere.
+- **Documented that step 4 refuses on a stock image.** Upstream
+  `config.example.ini` ships `[PWM] 4=waste`, so the v0.6.6 guard fires and
+  `patch-config-ini.py` exits 1 without writing. README step 4 now says to
+  free channel 4 first. Also noted that the configparser round-trip preserves
+  keys and values but drops comments.
+- **Tests**: new `TestStockImage` (3 cases) pins the stock-`[PWM] 4=waste`
+  refusal, that the refusal leaves `config.ini` byte-identical, and that
+  freeing channel 4 lets the patch through. `_seed_upstream_template`'s
+  docstring no longer claims to mirror a fresh image - it deliberately omits
+  `[PWM]` so the case-preservation assertions can run.
+- **`scripts/deploy-ui-yaml.sh`**: refuse to run as root. `$HOME` decides the
+  target directory, so under `sudo` the script previously reported success
+  while writing to `/root/.pioreactor/`, which Pioreactor never scans.
+- **README fixes**: `pio plugin install` -> `pio plugins install` (and the
+  `pios` form) - the click group is plural, the singular form is not a
+  command; version literals 0.6.6 -> 0.6.7; the descriptor `grep` now matches
+  the `job_name` field rather than counting any line mentioning the plugin;
+  dropped the `pioreactor:www-data` ownership expectation, which
+  `deploy-ui-yaml.sh` never sets; added a recovery command for re-running the
+  install over an existing clone, which the removal of the `git checkout` step
+  in a1d2708 had left without one.
+- **`scripts/patch-config-ini.py` now writes atomically** (tempfile + `fsync` +
+  `os.replace`, matching `_atomic_write` in the plugin). A plain
+  `open(PATH, "w")` truncated the cluster's baseline `config.ini` before a byte
+  was written, so an interrupted run left every `pio` command on the unit
+  failing at config load - the exact state the install docs have no recovery
+  path for. This was the only one of the project's four ConfigParser sites not
+  covered by the atomic-write guarantee CHANGELOG advertises.
+- **`scripts/deploy-ui-yaml.sh`** now resolves `DOT_PIOREACTOR` before falling
+  back to `$HOME/.pioreactor`, so step 3 and step 4 target one dot-directory
+  instead of two.
+- **`setup.py`**: `open("README.md", encoding="utf-8")`. Without it, a
+  C/POSIX-locale install (non-interactive `ssh host 'pip install ...'`, a
+  minimal image, a scrubbed `sudo` environment) died with a `UnicodeDecodeError`
+  on the README's non-ASCII characters before `setup()` ran.
+- **`tests/conftest.py`**: `DOT_PIOREACTOR` is now assigned to a fresh temp
+  directory rather than `setdefault`-ed to `/tmp`. The `job` fixture really
+  writes `config_<unit>.ini` and `unit_config.ini`, so under `setdefault` a
+  suite run from a shell that had exported `DOT_PIOREACTOR` (README step 6
+  tells you to) rewrote that unit's live per-unit config.
+- **README `Configuration` block**: dropped the inline `;` comments and moved
+  them to a list. `configparser` does not strip inline comments, so pasting the
+  block made `electrolysis_power` the string `2.5 ; LED D intensity (0-10 %...`,
+  and the `%` raised `InterpolationSyntaxError` for the whole file - breaking
+  every `pio` command on the unit, not just this plugin.
+- **README CLI section**: added the `export DOT_PIOREACTOR=...` that
+  `pio run electropioreactor` needs from an interactive shell; without it the
+  job aborts in `_config_paths()` with a bare `KeyError: 'DOT_PIOREACTOR'`.
+- **README step 6**: added a `config.ini` check (step 4 can exit without
+  writing and nothing stops you continuing past it), and the descriptor check
+  now counts occurrences rather than lines - the endpoint returns single-line
+  JSON, so `grep -c` printed `1` regardless of how many times the job appeared.
+- **`.gitignore`** (previously untracked, so a fresh clone had none): added the
+  Python build/test artifacts the README's own dev flow produces, and lifted
+  the agent-runtime paths out of the vibe-managed block so they survive its
+  documented removal.
+
 ## v0.6.7 (2026-05-10) — preserve key case in config.ini writes
 
 Pre-v0.6.7 the plugin used a default `configparser.ConfigParser()` in

@@ -93,6 +93,12 @@ sudo apt update && sudo apt install -y git
 git clone https://github.com/amy-bo/electroPioreactor.git
 ```
 
+If `electroPioreactor` is already on this unit from an earlier install, the clone will stop with "already exists". Bring the existing copy up to date instead:
+
+```bash
+git -C electroPioreactor checkout main && git -C electroPioreactor pull
+```
+
 ```bash
 /opt/pioreactor/venv/bin/pip install ./electroPioreactor/AEP-Plugin
 ```
@@ -101,9 +107,9 @@ git clone https://github.com/amy-bo/electroPioreactor.git
 /opt/pioreactor/venv/bin/pip show pioreactor-electropioreactor-plugin | grep Version
 ```
 
-The last line should print `Version: 0.6.6` (or later).
+The last line should print `Version: 0.6.7` (or later).
 
-> ℹ️ **Worker-only units stop here.** Steps 3–6 set up the web UI and `config.ini`, which live on the **leader**. A worker has no web UI of its own and receives its `config.ini` from the leader when you add it to the cluster, so running these steps on a worker fails with `Configuration file at .../config.ini is missing`. Install the plugin (step 2), then add the unit from the leader's **Inventory** – the leader's UI descriptor and config reach the worker through the cluster. Run steps 3–6 only on a **Leader** or **Leader + Worker** unit.
+> ℹ️ **Which units need which steps.** A unit must have joined a cluster before it has a `config.ini`, so add it from the leader's **Inventory** before running any of steps 3-6 on it. After that: run **step 3 on every unit that will run electroPioreactor**, workers included - each Pioreactor serves its own job descriptors from its own disk, and nothing copies them between units. Run **step 4 on the leader only** - `config.ini` is leader-owned and any worker-side edit is overwritten by the next sync; if your workers were already in the cluster when you ran it, push the change out with `pios sync-configs --shared`. **Steps 5 and 6 are safe on any unit** - workers serve `/unit_api` too, so step 6's checks are how you confirm a worker install landed.
 
 ### 3. Deploy the UI job descriptor
 
@@ -113,7 +119,9 @@ bash /home/pioreactor/electroPioreactor/AEP-Plugin/scripts/deploy-ui-yaml.sh
 
 ### 4. Patch `config.ini` (idempotent)
 
-Adds `[PWM] 4=relay` and the four `[electropioreactor.config]` defaults. Re-runs are safe; existing keys are preserved.
+Adds `[PWM] 4=relay` and the four `[electropioreactor.config]` defaults. Re-runs are safe; existing keys and values are preserved (comments and blank lines in `config.ini` are not - the file is rewritten by `configparser`).
+
+A stock Pioreactor image ships `[PWM] 4=waste`. Free channel 4 first on the **Configuration** page, or the script refuses and exits without changing anything.
 
 ```bash
 /opt/pioreactor/venv/bin/python /home/pioreactor/electroPioreactor/AEP-Plugin/scripts/patch-config-ini.py
@@ -137,19 +145,25 @@ export DOT_PIOREACTOR=/home/pioreactor/.pioreactor
 /opt/pioreactor/venv/bin/pio plugins list 2>&1 | grep electro
 ```
 
-Expected: `pioreactor-electropioreactor-plugin==0.6.6` (or later).
+Expected: `pioreactor-electropioreactor-plugin==0.6.7` (or later).
 
 ```bash
 ls -la /home/pioreactor/.pioreactor/plugins/ui/jobs/20_electropioreactor.yaml
 ```
 
-Expected: file present, owned by `pioreactor:www-data`.
+Expected: file present, owned by `pioreactor`. (`pio plugins install` also puts the group to `www-data`; `deploy-ui-yaml.sh` leaves your default group, which lighttpd can still read.)
 
 ```bash
-curl -s http://localhost/unit_api/jobs/descriptors | grep -c electropioreactor
+curl -s http://localhost/unit_api/jobs/descriptors | grep -o '"job_name": *"electropioreactor"' | wc -l
 ```
 
-Expected: `1`.
+Expected: `1`. Run this on each unit that will run the job - the endpoint reports only that unit's own descriptors. (Count occurrences, not lines: the endpoint returns the whole payload on one line, so `grep -c` would print `1` however many times the job appears.)
+
+```bash
+grep -E -A6 '^\[(PWM|electropioreactor\.config)\]' /home/pioreactor/.pioreactor/config.ini
+```
+
+Expected: `[PWM]` contains `4 = relay`, and `[electropioreactor.config]` lists the four settings. Step 4 exits without writing if it finds PWM 4 already assigned to something else, and nothing between the steps stops you continuing past that - so check the file rather than assuming.
 
 Then in your browser, hard-refresh `http://<hostname>.local/` (Ctrl/Cmd+Shift+R), navigate to **Pioreactors → `<hostname>` → Manage**, and **electroPioreactor** should appear under **Activities**.
 
@@ -160,14 +174,16 @@ Then in your browser, hard-refresh `http://<hostname>.local/` (Ctrl/Cmd+Shift+R)
 Once the plugin is published to PyPI, installation will be a one-liner:
 
 ```bash
-pio plugin install pioreactor-electropioreactor-plugin
+pio plugins install pioreactor-electropioreactor-plugin
 ```
 
 Or on the whole cluster:
 
 ```bash
-pios plugin install pioreactor-electropioreactor-plugin
+pios plugins install pioreactor-electropioreactor-plugin
 ```
+
+`pio plugins install` accepts a `--source` archive URL as well as a PyPI name, and unlike the manual steps above it deploys the UI descriptor and merges this plugin's `additional_config.ini` for you, on leaders and workers alike. Worth switching the documented install to once the archive layout has been tested on a unit.
 
 ### Pre-built OS image (future)
 
@@ -191,11 +207,18 @@ The install flow above writes the following to `~/.pioreactor/config.ini`:
 4=relay
 
 [electropioreactor.config]
-electrolysis_power=2.5              ; LED D intensity (0–10 %, clamped at runtime)
-sparge_duration_seconds=10.0        ; solenoid open time per cycle (s)
-sparge_interval_minutes=60.0        ; cycle frequency (min)
-od_pause_after_sparge_seconds=5.0   ; OD settle window after sparge ends (s); negative allowed
+electrolysis_power=2.5
+sparge_duration_seconds=10.0
+sparge_interval_minutes=60.0
+od_pause_after_sparge_seconds=5.0
 ```
+
+- `electrolysis_power` - LED D intensity, 0-10 %, clamped at runtime.
+- `sparge_duration_seconds` - solenoid open time per cycle, in seconds.
+- `sparge_interval_minutes` - cycle frequency, in minutes.
+- `od_pause_after_sparge_seconds` - OD settle window after the sparge ends, in seconds; negative values allowed.
+
+Keep those descriptions out of the file itself. `configparser` does not strip inline `;` comments, so a trailing comment becomes part of the value, and a `%` inside one breaks interpolation for the whole file - every `pio` command on the unit then fails at config load, not just this plugin.
 
 Adjust these values in the Pioreactor **Configuration** page, or change them live via the **Settings** panel on the *Manage* screen while the job is running.
 
@@ -205,7 +228,11 @@ Adjust these values in the Pioreactor **Configuration** page, or change them liv
 
 Via the web interface: open the **Activities** tab on the *Manage* screen and start **electroPioreactor**. All four parameters can then be adjusted live from the **Settings** panel without restarting the job.
 
-Via CLI:
+Via CLI. Pioreactor sets `DOT_PIOREACTOR` for its own services but an interactive SSH shell does not have it, and the job needs it at start-up, so export it first in any shell you launch the job from:
+
+```bash
+export DOT_PIOREACTOR=/home/pioreactor/.pioreactor
+```
 
 ```bash
 pio run electropioreactor \

@@ -45,9 +45,14 @@ via the Pioreactor Advanced modal.
 ## Development setup
 
 ```bash
-cd AEP-Plugin
-python3 -m pytest tests/        # all tests run off-device; no Pi needed
+python3 -m pytest tests/        # from the repo root; all tests run off-device, no Pi needed
 ```
+
+This repo (`amy-bo/pioreactor-electroPioreactor-plugin`) IS the plugin: `setup.py`,
+`pioreactor_electropioreactor_plugin/`, `scripts/` and `tests/` all sit at the root.
+The same content also lives at `AEP-Plugin/` inside the `amy-bo/electroPioreactor`
+monorepo, which is what `README.md`'s install steps clone - so any `AEP-Plugin/`
+path prefix you see refers to the monorepo checkout, never to this one.
 
 Tests use a conftest that stubs the entire `pioreactor` package.
 `DOT_PIOREACTOR` is set to `/tmp` in conftest so file-write code doesn't error.
@@ -58,7 +63,7 @@ End-user install steps are in `README.md`. For development, an editable
 install off a local checkout is convenient:
 
 ```bash
-/opt/pioreactor/venv/bin/pip install -e /path/to/electroPioreactor/AEP-Plugin
+/opt/pioreactor/venv/bin/pip install -e /path/to/this/checkout
 ```
 
 ## Status
@@ -81,10 +86,13 @@ install off a local checkout is convenient:
   the top of `__init__`, before any validator that can raise, so cleanup
   on a validator failure doesn't `AttributeError` on `_sparge_timer` and
   mask the real `ValueError`.
+- **v0.6.6** (2026-05-08) - PR-16 review feedback: minimum Pioreactor
+  raised to 26.5.0 and the transitional PR-615 hot-patch flow deleted
+  (26.5.0 ships #615 natively); PWM channel resolved from `[PWM_reverse]`
+  rather than hardcoded.
+- **v0.6.7** (2026-05-10) - use `pioreactor.config.ConfigParserMod` in all
+  four ConfigParser sites so a write-after-read stops lower-casing existing
+  keys (`[leds]` A/B/C/D, the three PID-gain sections).
 
-The Advanced modal hard-refresh symptom was fixed upstream in
-[Pioreactor/pioreactor#615](https://github.com/Pioreactor/pioreactor/pull/615)
-(merged 2026-04-30, will ship in 26.4.5). On Pioreactor 26.4.4 or earlier,
-the README's install path applies a pre-built static-bundle hot-patch from
-`AEP-Plugin/transitional/pioreactor-static-pr615.tar.gz` so the plugin's
-Advanced modal works without a hard-refresh on those versions too.
+See `CHANGELOG.md` for the full narrative; this list is a pointer, not a
+second changelog.

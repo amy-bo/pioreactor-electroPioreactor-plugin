@@ -50,8 +50,16 @@ def main() -> int:
     for k, v in DEFAULTS.items():
         p[sec].setdefault(k, v)
 
-    with open(PATH, "w") as f:
+    # Atomic write, matching the plugin's own _atomic_write: a plain
+    # open(PATH, "w") truncates the cluster's baseline config.ini before a
+    # byte is written, so an interrupted run (Ctrl-C, full SD card, power
+    # blip) leaves every `pio` command on the unit failing at config load.
+    tmp = PATH.with_suffix(PATH.suffix + ".tmp")
+    with open(tmp, "w") as f:
         p.write(f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, PATH)
 
     print(f"Patched: {PATH}")
     return 0
