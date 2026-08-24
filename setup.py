@@ -10,7 +10,9 @@ setup(
     license="MIT",
     license_files=("LICENSE.txt",),
     description="Electrolysis and CO₂ sparging control for electroPioreactors.",
-    long_description=open("README.md").read(),
+    # Explicit encoding: README.md is non-ASCII (CO2 subscript, admonition
+    # glyphs), so a C/POSIX-locale install would die on locale-default decode.
+    long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="Martin Currie",
     author_email="6342315+Aqueum@users.noreply.github.com",

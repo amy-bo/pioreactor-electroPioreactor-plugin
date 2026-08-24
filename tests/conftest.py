@@ -8,12 +8,18 @@ inside ElectroPioreactor itself is exercised.
 import configparser
 import os
 import sys
+import tempfile
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Point DOT_PIOREACTOR at /tmp so _config_paths() has a writable directory.
-os.environ.setdefault("DOT_PIOREACTOR", "/tmp")
+# Point DOT_PIOREACTOR at a throwaway directory so _config_paths() has
+# somewhere writable. Assigned, not setdefault: the `job` fixture drives
+# on_init_to_ready() -> _save_all_config(), which really writes
+# config_<unit>.ini and unit_config.ini. With setdefault, running the suite
+# on a Pi from a shell that had exported DOT_PIOREACTOR (README step 6 tells
+# you to) would rewrite that unit's live per-unit config.
+os.environ["DOT_PIOREACTOR"] = tempfile.mkdtemp(prefix="electropioreactor-tests-")
 
 
 def _mod(name: str) -> types.ModuleType:

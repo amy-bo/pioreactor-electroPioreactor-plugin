@@ -41,11 +41,16 @@ def _load_patch_module():
 
 
 def _seed_upstream_template(p: Path) -> None:
-    """Write a config.ini that mirrors a fresh Pioreactor 26.5+ image:
-    `[leds]` with letter keys A/B/C/D, `[od_config.photodiode_channel]`
+    """Write a config.ini covering the case-sensitive sections this fix is
+    about: `[leds]` with letter keys A/B/C/D, `[od_config.photodiode_channel]`
     with numeric keys, and the three real upstream PID sections with
     capitalised gains. Section names + key shape verified against
-    packaging/shared-assets/pioreactor/config.example.ini."""
+    packaging/shared-assets/pioreactor/config.example.ini.
+
+    NOTE: deliberately has NO `[PWM]` section, so the PWM-4 guard does not
+    fire and the case-preservation assertions can run. A genuinely stock
+    image DOES ship `[PWM] 4=waste` - see
+    `TestStockImage.test_stock_pwm_4_waste_is_refused` for that path."""
     p.write_text(
         "[leds]\n"
         "A=IR\n"
@@ -163,3 +168,62 @@ class TestCasePreservation:
         mod = _load_patch_module()
         assert mod.main() == 1
         assert "refusing to overwrite [PWM] 4" in capsys.readouterr().err
+
+
+# ── behaviour on a genuinely stock image ─────────────────────────────────────
+
+
+class TestStockImage:
+    """Pins what the script does against the PWM block upstream actually
+    ships, so the README's install steps stay honest about it."""
+
+    # Verbatim from packaging/shared-assets/pioreactor/config.example.ini
+    # (unchanged between master and tag 26.5.0).
+    STOCK_PWM = (
+        "[PWM]\n"
+        "# map the PWM channels to externals.\n"
+        "# hardware PWM are available on channels 2 & 4.\n"
+        "1=stirring\n"
+        "2=media\n"
+        "3=alt_media\n"
+        "4=waste\n"
+        "5=heating\n"
+    )
+
+    def test_stock_pwm_4_waste_is_refused(self, tmp_path, monkeypatch, capsys):
+        # A stock image assigns PWM 4 to `waste`, so the guard fires and the
+        # script is a no-op until the user frees the channel. README step 4
+        # documents this; if the guard ever silently overwrote instead, a
+        # waste pump would be driven as a CO2 solenoid.
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(self.STOCK_PWM, encoding="utf-8")
+        monkeypatch.setenv("DOT_PIOREACTOR", str(tmp_path))
+
+        mod = _load_patch_module()
+        assert mod.main() == 1
+        assert "refusing to overwrite [PWM] 4 = 'waste'" in capsys.readouterr().err
+
+    def test_refusal_leaves_config_untouched(self, tmp_path, monkeypatch):
+        # The refusal path must not half-write: no [electropioreactor.config]
+        # section, and the other channel assignments unchanged.
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(self.STOCK_PWM, encoding="utf-8")
+        monkeypatch.setenv("DOT_PIOREACTOR", str(tmp_path))
+
+        mod = _load_patch_module()
+        assert mod.main() == 1
+        assert cfg.read_text(encoding="utf-8") == self.STOCK_PWM
+
+    def test_freeing_channel_4_lets_the_patch_through(self, tmp_path, monkeypatch):
+        # The documented remedy: clear PWM 4, re-run, and it succeeds.
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(self.STOCK_PWM.replace("4=waste\n", ""), encoding="utf-8")
+        monkeypatch.setenv("DOT_PIOREACTOR", str(tmp_path))
+
+        mod = _load_patch_module()
+        assert mod.main() == 0
+
+        parsed = _read_preserving_case(cfg)
+        assert parsed["PWM"]["4"] == "relay"
+        assert parsed["PWM"]["1"] == "stirring"
+        assert parsed["electropioreactor.config"]["electrolysis_power"] == "2.5"
