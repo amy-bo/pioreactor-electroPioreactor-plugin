@@ -4,7 +4,7 @@
 # Run this ON YOUR MAC, from the repo, with the card still in the card reader
 # after Raspberry Pi Imager has finished - before the card goes into the Pi:
 #
-#   bash AEP-Plugin/scripts/stage-sd-card.sh [BOOT_VOLUME] [COUNTRY_CODE] [PYPI_PLUGINS]
+#   bash scripts/stage-sd-card.sh [BOOT_VOLUME] [COUNTRY_CODE] [PYPI_PLUGINS]
 #
 # BOOT_VOLUME defaults to /Volumes/bootfs (or /Volumes/boot). COUNTRY_CODE is
 # the two-letter WiFi country for the Pioreactor's own access point, e.g. GB;
@@ -18,8 +18,9 @@
 # the boot partition remounts read-write, and nothing is rewritten.
 set -euo pipefail
 
-REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-SRC="$REPO_ROOT/AEP-Plugin"
+# This repo is the plugin; the card payload keeps its AEP-Plugin/ folder name,
+# which install-from-card.sh reads on the Pi.
+SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CARD="${1:-}"
 COUNTRY="${2:-}"
 PYPI_PLUGINS="${3:-}"
@@ -93,7 +94,7 @@ elif [ -n "$COUNTRY" ]; then
 else
     echo "    MISSING. Without it the Pioreactor will not raise its own WiFi, and with"
     echo "    no LAN you will have no way in. Re-run with a country code:"
-    echo "        bash AEP-Plugin/scripts/stage-sd-card.sh $CARD GB"
+    echo "        bash scripts/stage-sd-card.sh $CARD GB"
     echo "    (or download the file from https://docs.pioreactor.com/user-guide/local-access-point)"
 fi
 

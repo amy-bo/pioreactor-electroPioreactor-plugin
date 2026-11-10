@@ -52,23 +52,23 @@ hardware binding.
 ## Development setup
 
 ```bash
-cd AEP-Plugin
-python3 -m pytest tests/        # all tests run off-device; no Pi needed
+python3 -m pytest tests/        # from the repo root; all tests run off-device, no Pi needed
 ```
 
 Tests use a conftest that stubs the entire `pioreactor` package.
-`DOT_PIOREACTOR` is set to `/tmp` in conftest so file-write code doesn't error.
+`DOT_PIOREACTOR` is set to a throwaway temp directory in conftest so file-write code doesn't error
+and a run on a Pi never touches that unit's live config.
 
 ## Device install
 
 End-user install steps are in `README.md`: the card install route (drag the
 `pioreactor` folder from the card bundle onto the `bootfs` drive of a freshly
-flashed card; built by `scripts/make-card-bundle.sh` and the `card-bundle`
+flashed card; built by `card-bundle/make-card-bundles.sh` and the `card-bundle`
 workflow on each GitHub release) and the manual SSH route. For development, an
 editable install off a local checkout is convenient:
 
 ```bash
-/opt/pioreactor/venv/bin/pip install -e /path/to/electroPioreactor/AEP-Plugin
+/opt/pioreactor/venv/bin/pip install -e /path/to/this/checkout
 ```
 
 ## Status
@@ -99,7 +99,7 @@ The Advanced modal hard-refresh symptom was fixed upstream in
 This plugin now simply **requires Pioreactor ≥ 26.5.0** (declared as the
 minimum in `setup.py` / the README compatibility section). The earlier
 transitional hot-patch flow — which applied a pre-built static-bundle from
-`AEP-Plugin/transitional/pioreactor-static-pr615.tar.gz` to patch the UI on
+`transitional/pioreactor-static-pr615.tar.gz` to patch the UI on
 26.4.4-or-earlier units — was **removed in v0.6.6**, along with the
 `transitional/` directory. We don't patch users' systems behind their backs;
 the remedy on an older unit is to run `pio update` to reach 26.5.0+ before

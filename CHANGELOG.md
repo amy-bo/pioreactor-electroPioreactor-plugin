@@ -1,5 +1,28 @@
 # electroPioreactor Plugin — Changelog
 
+## v0.7.4 (unreleased) — new home; install-flow fixes ported
+
+**New home.** The plugin now lives at <https://github.com/amy-bo/pioreactor-electroPioreactor-plugin>,
+with its full history from `AEP-Plugin/` in amy-bo/electroPioreactor. Releases, card bundles
+(`card-bundle/` moved here; its release workflow follows in a separate change) and issues are here from this version on;
+`__plugin_homepage__`, `setup.py`'s `url` and the README's links point here.
+
+**Ported from 5cb1557** (made in this repo in July, never carried back to the monorepo):
+- `deploy-ui-yaml.sh` refuses to run as root (under sudo the descriptor landed in `/root`,
+  which Pioreactor never scans) and honours `DOT_PIOREACTOR`, like `patch-config-ini.py`.
+- `patch-config-ini.py` writes `config.ini` atomically, so an interrupted run can't leave
+  the unit's config truncated.
+- `setup.py` reads the README as UTF-8 (a C/POSIX-locale install died on the decode) and
+  uses the GitHub noreply author address.
+- Tests: conftest points `DOT_PIOREACTOR` at a fresh temp directory rather than
+  `setdefault("/tmp")`, so running the suite on a Pi can't rewrite that unit's config;
+  `TestStockImage` pins the refusal on a stock image's `[PWM] 4=waste`.
+- README: the configuration block no longer carries inline `;` comments. `configparser`
+  keeps them as part of the value, and the `%` in "0–10 %" broke interpolation for the
+  whole file if copied into `config.ini`.
+
+**Also:** `stage-sd-card.sh` finds the plugin at the repo root.
+
 ## v0.7.3 (2026-11-06) — OD reading no longer stays paused with continuous electrolysis
 
 **Bug (v0.7.0–v0.7.2).** With the default settings (`electrolysis_on_seconds = 60`,

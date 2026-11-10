@@ -73,13 +73,13 @@ Needs a Pioreactor OS release with boot-partition plugin support (proposed at ht
    - Worker-only units: follow the same steps with a **Worker** image. Flash each worker with the step 15 Wi-Fi page set to network `pioreactor`, password `raspberry`, and at step 3 below do not drag the `local_access_point` file across. The plugin installs when you add the unit from the leader's **Inventory** page. Hotspot cluster: boot the leader first.
 
    With those in mind, follow [Pioreactor's software set-up guide](https://docs.pioreactor.com/user-guide/software-set-up) up to **Write**, and come back here while the card writes.
-2. Download and unzip the [AEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-AEP-card-bundle.zip).
+2. Download and unzip the [AEP card bundle](https://github.com/amy-bo/pioreactor-electroPioreactor-plugin/releases/latest/download/electroPioreactor-AEP-card-bundle.zip).
 3. When the write finishes, drag the `pioreactor` folder from the bundle onto the `bootfs` drive. If you left the Wi-Fi page blank (for the leader Pioreactor to make its own network), also drag across the `local_access_point` file, after changing `GB` in it to your country code\*. DO NOT drag it across for workers, or if you set your Pioreactors up to join a Wi-Fi network. If the card was ejected anyway, remove and reinsert it.
 4. Eject the card. One change to the rest of Pioreactor's guide: for a unit that makes its own Wi-Fi, join the network `pioreactor` (password `raspberry`) and open `http://pioreactor.local`. Then continue the guide from its step 18; the model dialog at its step 21 does not appear, because the bundle has set the model. **electroPioreactor** is under **Activities** on the unit's *Manage* page, and the precision temperature plugin is installed.
 
    \* If your country code is not GB, open `local_access_point` in TextEdit/Notepad and replace `GB` with the ISO two-letter code (CA, IE, DE, AU, NZ, GL, US, etc.; see https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) and save; the file should contain just those two letters. Do nothing if you live in the United Kingdom of Great Britain and Northern Ireland (GB).
 
-MEP kit: the same steps with the [MEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-MEP-card-bundle.zip); there is no precision temperature plugin.
+MEP kit: the same steps with the [MEP card bundle](https://github.com/amy-bo/pioreactor-electroPioreactor-plugin/releases/latest/download/electroPioreactor-MEP-card-bundle.zip); there is no precision temperature plugin.
 
 If it is missing, put the card back in your computer: `pioreactor/plugins/failed/` on `bootfs` holds the wheel and a log of what went wrong.
 
@@ -88,7 +88,7 @@ If it is missing, put the card back in your computer: `pioreactor/plugins/failed
 
 For a unit that is already running, or an OS release without boot-partition plugin support.
 
-1. Download and unzip the [AEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-AEP-card-bundle.zip) (or the [MEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-MEP-card-bundle.zip)) on your computer.
+1. Download and unzip the [AEP card bundle](https://github.com/amy-bo/pioreactor-electroPioreactor-plugin/releases/latest/download/electroPioreactor-AEP-card-bundle.zip) (or the [MEP card bundle](https://github.com/amy-bo/pioreactor-electroPioreactor-plugin/releases/latest/download/electroPioreactor-MEP-card-bundle.zip)) on your computer.
 2. In a terminal, from the unzipped `pioreactor/plugins` folder, with `<hostname>` replaced by the unit's name. Each command asks for the unit's password; answer `yes` if asked about a fingerprint.
 
    ```bash
@@ -109,15 +109,26 @@ Installation sets these defaults:
 4=relay
 
 [electropioreactor.config]
-led_channel=D                            ; LED channel for the electrode pair (A/B/C/D)
-electrolysis_power=2.5                   ; LED intensity (0–10 %, clamped at runtime)
-electrolysis_on_seconds=60.0             ; electrolysis ON time per cycle (s, > 0)
-electrolysis_off_seconds=0.0             ; electrolysis OFF time per cycle (s, >= 0; 0 = continuous)
-od_pause_after_electrolysis_seconds=5.0  ; OD settle window after electrolysis ON ends (s); negative allowed
-sparge_duration_seconds=10.0             ; solenoid open time per cycle (s)
-sparge_interval_minutes=60.0             ; cycle frequency (min)
-od_pause_after_sparge_seconds=5.0        ; OD settle window after sparge ends (s); negative allowed
+led_channel=D
+electrolysis_power=2.5
+electrolysis_on_seconds=60.0
+electrolysis_off_seconds=0.0
+od_pause_after_electrolysis_seconds=5.0
+sparge_duration_seconds=10.0
+sparge_interval_minutes=60.0
+od_pause_after_sparge_seconds=5.0
 ```
+
+- `led_channel`: LED channel for the electrode pair (A/B/C/D)
+- `electrolysis_power`: LED intensity (0–10 %, clamped at runtime)
+- `electrolysis_on_seconds`: electrolysis ON time per cycle (s, > 0)
+- `electrolysis_off_seconds`: electrolysis OFF time per cycle (s, >= 0; 0 = continuous)
+- `od_pause_after_electrolysis_seconds`: OD settle window after electrolysis ON ends (s); negative allowed
+- `sparge_duration_seconds`: solenoid open time per cycle (s)
+- `sparge_interval_minutes`: cycle frequency (min)
+- `od_pause_after_sparge_seconds`: OD settle window after sparge ends (s); negative allowed
+
+Keep those descriptions out of `config.ini` itself: `configparser` does not strip inline `;` comments, so a trailing comment becomes part of the value, and a `%` inside one breaks interpolation for the whole file, so every `pio` command on the unit fails at config load.
 
 Change the numeric values on the Pioreactor **Configuration** page, or live in the job's **Settings** panel while it runs; a new value applies from the next phase or cycle. `led_channel` is a hardware binding read at job start: change it in `config.ini` and restart the job.
 
@@ -145,15 +156,15 @@ Requires Pioreactor 26.5.0 or later. On an older unit, run `pio update` first.
 ## Development
 
 ```bash
-git clone https://github.com/amy-bo/electroPioreactor.git
-cd electroPioreactor/AEP-Plugin
+git clone https://github.com/amy-bo/pioreactor-electroPioreactor-plugin.git
+cd pioreactor-electroPioreactor-plugin
 pip install -e ".[dev]"
 pytest tests/                   # off-device, no Pi needed
 ```
 
 ## Contributing
 
-Issues and pull requests welcome at <https://github.com/amy-bo/electroPioreactor>.
+Issues and pull requests welcome at <https://github.com/amy-bo/pioreactor-electroPioreactor-plugin>. The electroPioreactor hardware, build guide and gas model live at <https://github.com/amy-bo/electroPioreactor>.
 
 ### Release checklist (maintainers)
 

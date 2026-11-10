@@ -20,10 +20,10 @@ from pioreactor.whoami import get_assigned_experiment_name
 from pioreactor.whoami import get_unit_name
 
 __plugin_summary__ = "Electrolysis and CO₂ sparging control for electroPioreactors"
-__plugin_version__ = "0.7.3"
+__plugin_version__ = "0.7.4"
 __plugin_name__ = "electroPioreactor"
 __plugin_author__ = "Martin Currie"
-__plugin_homepage__ = "https://github.com/amy-bo/electroPioreactor"
+__plugin_homepage__ = "https://github.com/amy-bo/pioreactor-electroPioreactor-plugin"
 
 _CONFIG_SECTION = "electropioreactor.config"
 
