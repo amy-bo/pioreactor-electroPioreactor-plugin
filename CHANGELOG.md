@@ -1,10 +1,10 @@
 # electroPioreactor Plugin — Changelog
 
-## v0.7.4 (unreleased) — new home; install-flow fixes ported
+## v0.7.4 (2026-11-10) — new home; install-flow fixes ported
 
 **New home.** The plugin now lives at <https://github.com/amy-bo/pioreactor-electroPioreactor-plugin>,
 with its full history from `AEP-Plugin/` in amy-bo/electroPioreactor. Releases, card bundles
-(`card-bundle/` moved here; its release workflow follows in a separate change) and issues are here from this version on;
+(`card-bundle/` moved here; the v0.7.4 bundles were built with `card-bundle/make-card-bundles.sh` and attached by hand, as the release workflow follows in a separate change) and issues are here from this version on;
 `__plugin_homepage__`, `setup.py`'s `url` and the README's links point here.
 
 **Ported from 5cb1557** (made in this repo in July, never carried back to the monorepo):
