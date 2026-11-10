@@ -6,16 +6,14 @@ from setuptools import setup
 
 setup(
     name="pioreactor-electropioreactor-plugin",
-    version="0.6.7",
+    version="0.7.3",
     license="MIT",
     license_files=("LICENSE.txt",),
     description="Electrolysis and CO₂ sparging control for electroPioreactors.",
-    # Explicit encoding: README.md is non-ASCII (CO2 subscript, admonition
-    # glyphs), so a C/POSIX-locale install would die on locale-default decode.
-    long_description=open("README.md", encoding="utf-8").read(),
+    long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     author="Martin Currie",
-    author_email="6342315+Aqueum@users.noreply.github.com",
+    author_email="martin@amybo.org",
     url="https://github.com/amy-bo/electroPioreactor",
     packages=find_packages(),
     include_package_data=True,

@@ -33,37 +33,42 @@ earlier in the session does NOT carry. Each actuation needs its own yes.
 
 ## What this plugin does
 
-Drives electrolysis via LED channel D and periodically opens a CO₂ solenoid on PWM channel 4.
-Electrolysis is paused during each sparge. All three settings are user-configurable at runtime
-via the Pioreactor Advanced modal.
+Drives electrolysis on the configured LED channel (default D), cycling it ON/OFF on a
+user-defined schedule (`electrolysis_on_seconds` / `electrolysis_off_seconds`; off=0 =
+continuous), and periodically opens a CO₂ solenoid on the configured PWM channel (default 4).
+Electrolysis is paused during each sparge. In cycling mode (off > 0) OD reading is paused
+around each electrolysis ON phase (plus `od_pause_after_electrolysis_seconds`, which may be
+negative — see `od_pause_window_seconds`); continuous electrolysis does not pause OD (v0.7.3
+fix: v0.7.0–v0.7.2 re-armed that pause every 60 s so it never expired). Independently, OD is
+paused around each sparge. All numeric settings are
+user-configurable at runtime via the Pioreactor Advanced modal; `led_channel` is a config-only
+hardware binding.
 
 ## Hardware connections
 
-- Electrode pair → LED channel D
-- CO₂ solenoid → PWM channel 4
+- Electrode pair → configured LED channel (`[electropioreactor.config] led_channel`, default D, A/B/C/D)
+- CO₂ solenoid → configured PWM channel (`[PWM] N = relay`, default 4)
 
 ## Development setup
 
 ```bash
-python3 -m pytest tests/        # from the repo root; all tests run off-device, no Pi needed
+cd AEP-Plugin
+python3 -m pytest tests/        # all tests run off-device; no Pi needed
 ```
-
-This repo (`amy-bo/pioreactor-electroPioreactor-plugin`) IS the plugin: `setup.py`,
-`pioreactor_electropioreactor_plugin/`, `scripts/` and `tests/` all sit at the root.
-The same content also lives at `AEP-Plugin/` inside the `amy-bo/electroPioreactor`
-monorepo, which is what `README.md`'s install steps clone - so any `AEP-Plugin/`
-path prefix you see refers to the monorepo checkout, never to this one.
 
 Tests use a conftest that stubs the entire `pioreactor` package.
 `DOT_PIOREACTOR` is set to `/tmp` in conftest so file-write code doesn't error.
 
 ## Device install
 
-End-user install steps are in `README.md`. For development, an editable
-install off a local checkout is convenient:
+End-user install steps are in `README.md`: the card install route (drag the
+`pioreactor` folder from the card bundle onto the `bootfs` drive of a freshly
+flashed card; built by `scripts/make-card-bundle.sh` and the `card-bundle`
+workflow on each GitHub release) and the manual SSH route. For development, an
+editable install off a local checkout is convenient:
 
 ```bash
-/opt/pioreactor/venv/bin/pip install -e /path/to/this/checkout
+/opt/pioreactor/venv/bin/pip install -e /path/to/electroPioreactor/AEP-Plugin
 ```
 
 ## Status
@@ -86,13 +91,16 @@ install off a local checkout is convenient:
   the top of `__init__`, before any validator that can raise, so cleanup
   on a validator failure doesn't `AttributeError` on `_sparge_timer` and
   mask the real `ValueError`.
-- **v0.6.6** (2026-05-08) - PR-16 review feedback: minimum Pioreactor
-  raised to 26.5.0 and the transitional PR-615 hot-patch flow deleted
-  (26.5.0 ships #615 natively); PWM channel resolved from `[PWM_reverse]`
-  rather than hardcoded.
-- **v0.6.7** (2026-05-10) - use `pioreactor.config.ConfigParserMod` in all
-  four ConfigParser sites so a write-after-read stops lower-casing existing
-  keys (`[leds]` A/B/C/D, the three PID-gain sections).
 
-See `CHANGELOG.md` for the full narrative; this list is a pointer, not a
-second changelog.
+The Advanced modal hard-refresh symptom was fixed upstream in
+[Pioreactor/pioreactor#615](https://github.com/Pioreactor/pioreactor/pull/615)
+(merged 2026-04-30), which shipped in Pioreactor 26.5.0 (2026-05-07).
+
+This plugin now simply **requires Pioreactor ≥ 26.5.0** (declared as the
+minimum in `setup.py` / the README compatibility section). The earlier
+transitional hot-patch flow — which applied a pre-built static-bundle from
+`AEP-Plugin/transitional/pioreactor-static-pr615.tar.gz` to patch the UI on
+26.4.4-or-earlier units — was **removed in v0.6.6**, along with the
+`transitional/` directory. We don't patch users' systems behind their backs;
+the remedy on an older unit is to run `pio update` to reach 26.5.0+ before
+installing this plugin.

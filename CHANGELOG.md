@@ -1,82 +1,210 @@
 # electroPioreactor Plugin — Changelog
 
-## Unreleased - install-doc corrections (leader/worker, PWM 4, versions)
+## v0.7.3 (2026-11-06) — OD reading no longer stays paused with continuous electrolysis
 
-Covers the docs landed in a1d2708 (PR #26) plus the review pass over it.
-No runtime behaviour change to the plugin itself.
+**Bug (v0.7.0–v0.7.2).** With the default settings (`electrolysis_on_seconds = 60`,
+`electrolysis_off_seconds = 0` i.e. continuous, `od_pause_after_electrolysis_seconds = 5`)
+`od_reading` was paused when the job started and was never resumed while the job ran.
+Continuous mode re-entered the full ON phase every 60 s (`_begin_electrolysis_off` →
+`_begin_electrolysis_on`), and each entry re-armed the 65 s electrolysis OD pause:
 
-- **Corrected the worker admonition added in a1d2708.** Two of its claims
-  were wrong when checked against Pioreactor 26.5.0's own source. (a) The UI
-  job descriptor does *not* reach a worker "through the cluster": each unit
-  serves its own descriptors, and the leader proxies
-  `/api/workers/<unit>/jobs/descriptors` to that worker's `/unit_api`, which
-  reads that worker's own `plugins/ui/jobs/`. The add-worker script scps only
-  `config.ini`, and `47_update_distribute_ui_assets_to_workers.sh` rsyncs only
-  `~/.pioreactor/ui` (built-ins), never `plugins/ui/`. So a worker told to skip
-  step 3 never shows electroPioreactor under Activities. (b) "A worker has no
-  web UI of its own" is wrong - `50-pioreactorui.conf` has no leader/worker
-  branch, so workers serve `/unit_api` and steps 5 and 6 work there. The note
-  now says: add the unit to the cluster first, run step 3 on **every** unit
-  that will run the job, run step 4 on the **leader only** (config.ini is
-  leader-owned and worker-side edits are overwritten by the next sync),
-  followed by `pios sync-configs --shared` when workers are already joined,
-  and treat steps 5-6 as safe anywhere.
-- **Documented that step 4 refuses on a stock image.** Upstream
-  `config.example.ini` ships `[PWM] 4=waste`, so the v0.6.6 guard fires and
-  `patch-config-ini.py` exits 1 without writing. README step 4 now says to
-  free channel 4 first. Also noted that the configparser round-trip preserves
-  keys and values but drops comments.
-- **Tests**: new `TestStockImage` (3 cases) pins the stock-`[PWM] 4=waste`
-  refusal, that the refusal leaves `config.ini` byte-identical, and that
-  freeing channel 4 lets the patch through. `_seed_upstream_template`'s
-  docstring no longer claims to mirror a fresh image - it deliberately omits
-  `[PWM]` so the case-preservation assertions can run.
-- **`scripts/deploy-ui-yaml.sh`**: refuse to run as root. `$HOME` decides the
-  target directory, so under `sudo` the script previously reported success
-  while writing to `/root/.pioreactor/`, which Pioreactor never scans.
-- **README fixes**: `pio plugin install` -> `pio plugins install` (and the
-  `pios` form) - the click group is plural, the singular form is not a
-  command; version literals 0.6.6 -> 0.6.7; the descriptor `grep` now matches
-  the `job_name` field rather than counting any line mentioning the plugin;
-  dropped the `pioreactor:www-data` ownership expectation, which
-  `deploy-ui-yaml.sh` never sets; added a recovery command for re-running the
-  install over an existing clone, which the removal of the `git checkout` step
-  in a1d2708 had left without one.
-- **`scripts/patch-config-ini.py` now writes atomically** (tempfile + `fsync` +
-  `os.replace`, matching `_atomic_write` in the plugin). A plain
-  `open(PATH, "w")` truncated the cluster's baseline `config.ini` before a byte
-  was written, so an interrupted run left every `pio` command on the unit
-  failing at config load - the exact state the install docs have no recovery
-  path for. This was the only one of the project's four ConfigParser sites not
-  covered by the atomic-write guarantee CHANGELOG advertises.
-- **`scripts/deploy-ui-yaml.sh`** now resolves `DOT_PIOREACTOR` before falling
-  back to `$HOME/.pioreactor`, so step 3 and step 4 target one dot-directory
-  instead of two.
-- **`setup.py`**: `open("README.md", encoding="utf-8")`. Without it, a
-  C/POSIX-locale install (non-interactive `ssh host 'pip install ...'`, a
-  minimal image, a scrubbed `sudo` environment) died with a `UnicodeDecodeError`
-  on the README's non-ASCII characters before `setup()` ran.
-- **`tests/conftest.py`**: `DOT_PIOREACTOR` is now assigned to a fresh temp
-  directory rather than `setdefault`-ed to `/tmp`. The `job` fixture really
-  writes `config_<unit>.ini` and `unit_config.ini`, so under `setdefault` a
-  suite run from a shell that had exported `DOT_PIOREACTOR` (README step 6
-  tells you to) rewrote that unit's live per-unit config.
-- **README `Configuration` block**: dropped the inline `;` comments and moved
-  them to a list. `configparser` does not strip inline comments, so pasting the
-  block made `electrolysis_power` the string `2.5 ; LED D intensity (0-10 %...`,
-  and the `%` raised `InterpolationSyntaxError` for the whole file - breaking
-  every `pio` command on the unit, not just this plugin.
-- **README CLI section**: added the `export DOT_PIOREACTOR=...` that
-  `pio run electropioreactor` needs from an interactive shell; without it the
-  job aborts in `_config_paths()` with a bare `KeyError: 'DOT_PIOREACTOR'`.
-- **README step 6**: added a `config.ini` check (step 4 can exit without
-  writing and nothing stops you continuing past it), and the descriptor check
-  now counts occurrences rather than lines - the endpoint returns single-line
-  JSON, so `grep -c` printed `1` regardless of how many times the job appeared.
-- **`.gitignore`** (previously untracked, so a fresh clone had none): added the
-  Python build/test artifacts the README's own dev flow produces, and lifted
-  the agent-runtime paths out of the vibe-managed block so they survive its
-  documented removal.
+| t (s) | event |
+|---|---|
+| 0 | ON phase: OD → SLEEPING, resume timer for t = 65, next tick at t = 60 |
+| 60 | tick → new ON phase: v0.7.1's fix cancels the t = 65 resume, arms one for t = 125 |
+| 120 | same: t = 125 resume cancelled, new one for t = 185 |
+| … | the resume is always 5 s away and never fires; only a sparge's own pause/resume and job stop touch OD |
+
+(v0.7.0, before the v0.7.1 orphan-timer fix, instead let OD read for 55 s of every 60 s
+*during* electrolysis, after a 65 s start-up pause.) The v0.7.0 notes' claim that the
+defaults were "identical to the v0.6.x behaviour" was therefore wrong for OD reading; the
+LED side was the same, apart from being re-sent every minute.
+
+**Fix.** Continuous electrolysis has no OFF phase, so there is no bubble-free window to
+move OD readings into: the electrolysis OD pause now applies only when
+`electrolysis_off_seconds > 0`. Continuous mode keeps a 60 s internal tick (so a later
+switch to cycling takes effect) that no longer re-drives the LED or touches OD. With the
+defaults the job now behaves as v0.6.x did: LED lit once, OD read throughout, OD paused
+only for each sparge (+5 s). Cycling mode is unchanged.
+
+Related, same class:
+
+- Cycling settings whose OD window covers the whole cycle (`od_pause_after_electrolysis_seconds
+  ≥ electrolysis_off_seconds`, e.g. ON 60 / OFF 3 / settle 5) also never resume OD. That is
+  what such settings ask for, so it is kept, but the job now logs a warning (once per
+  combination of settings) instead of staying silent.
+- Only one electrolysis ON/OFF timer chain can run: each phase cancels any pending phase
+  timer before arming the next, so a spurious extra ON entry cannot start a second, parallel
+  chain whose timers escape `_cancel_timers`.
+- Switching cycling → continuous mid-run (Settings or Reset to Defaults) releases OD within
+  one pause window; continuous → cycling starts dodging from the next ON phase.
+
+**Tests.** New `tests/test_od_cadence.py` (21 tests) drives the job on a deterministic fake
+clock in place of `threading.Timer`, models `od_reading` at Pioreactor's default 5 s cadence,
+and asserts where readings land: full cadence with defaults, pauses only around sparges,
+LED lit once, the 65–120 s reading window per 120 s cycle in cycling mode, negative settle,
+the never-opens warning, mode switches, Reset to Defaults, stop/sleep release and no
+leftover timers. Seven existing tests that assumed the electrolysis OD pause in continuous
+mode now set an OFF phase; one new unit test pins that continuous mode does not pause OD.
+133 tests pass; against the v0.7.2 code, 9 of them fail (all the default-settings cadence
+tests among them).
+
+## v0.7.2 (2026-09-30) — v0.7.1 merged with the AEP0.2 install work
+
+The v0.7.x line (electrolysis cycling, OD pause around electrolysis, configurable LED channel, the v0.7.1 orphaned-timer fix) had never reached the AEP02 or main branches, which still shipped v0.6.7. This release merges it into AEP02 together with the September offline-install work: `scripts/patch-config-ini.py` keeps its `--force` option for a stock `[PWM] 4 = waste`, stays without the self-heal repair (removed in v0.6.7 after Gerrit's review), and now also writes the v0.7.x defaults (`led_channel`, `electrolysis_on_seconds`, `electrolysis_off_seconds`, `od_pause_after_electrolysis_seconds`).
+
+## Card install route (2026-09-24, docs only, shipped v0.6.7)
+
+No code change. Documents the card install route in `README.md`: flash a
+stock Pioreactor image, drag the `pioreactor` folder from the card bundle
+onto the `bootfs` drive, boot. Adds `scripts/make-card-bundle.sh` and a
+`card-bundle` GitHub workflow that builds
+`electroPioreactor-card-bundle.zip` (the plugin wheel under
+`pioreactor/plugins/`) and attaches it to each GitHub release. Depends on
+boot-partition plugin support in the Pioreactor image, proposed upstream
+from <https://github.com/amy-bo/CustoPiZer/tree/bootfs-plugins> and accepted
+in principle by Pioreactor on 2026-09-24. The SSH route remains documented
+for older images.
+
+## v0.7.1 (2026-06-26) — fix orphaned electrolysis OD-resume timer
+
+Bugfix on the v0.7.0 OD-pause-around-electrolysis path. `_begin_electrolysis_on`
+reassigned `self._electrolysis_od_resume_timer` **without first cancelling the
+prior one**. With a continuous-ish window where the OD-pause window (`on_seconds`
++ `od_pause_after_electrolysis_seconds`) exceeds the electrolysis period
+(e.g. `on=60, off=0, pause_after=5` → window `65` > period `60`), a second
+`_begin_electrolysis_on` fires while the previous window's resume timer is still
+pending. The orphaned timer later fired `_resume_od_reading("electrolysis")`,
+dropped the sole `electrolysis` pause owner, and republished the OD job **READY
+while electrolysis was still ON** — exactly the failure the sparge path already
+guards against. The orphan also escaped `_cancel_timers`, which only ever holds
+the latest timer reference.
+
+Fix: mirror the sparge path — cancel any pending
+`_electrolysis_od_resume_timer` before reassigning it (under the existing
+`window > 0` guard, keeping the daemon/start pattern). Added a symmetric
+unit regression (`test_begin_electrolysis_on_cancels_prior_od_resume_timer`)
+and a cycle-level regression (`test_second_electrolysis_on_does_not_resume_od_early`)
+asserting a second ON phase does not republish OD READY while the electrolysis
+owner is still held.
+
+## v0.7.0 (2026-06-25) — electrolysis ON/OFF cycling, OD pause around electrolysis, configurable LED channel
+
+Two new features plus the long-deferred configurable-LED-channel work
+(Gerrit's PR #16 flag).
+
+### Electrolysis ON/OFF cycling
+
+Electrolysis previously ran continuously (LED held at power, only dropped
+during a sparge). It now **cycles**: ON for `electrolysis_on_seconds`
+(> 0, default `60`), then OFF for `electrolysis_off_seconds` (≥ 0, default
+`0`), repeating. `electrolysis_off_seconds = 0` means continuous (no OFF
+phase) — identical to the v0.6.x behaviour, so default-config users see no
+change. *(Corrected in v0.7.3: not true for OD reading — with the defaults
+v0.7.0–v0.7.2 kept `od_reading` paused; see v0.7.3.)* The cycle is a `threading.Timer` chain
+(`_begin_electrolysis_on` → `_begin_electrolysis_off` → …) mirroring the
+existing sparge chain. A mid-phase setting change applies to the next
+phase, not the in-flight one (same invariant as `sparge_duration_seconds`).
+
+### OD-read pause around electrolysis
+
+OD reading is now paused around each electrolysis ON phase, governed by a
+new `od_pause_after_electrolysis_seconds` (default `5.0`). The effective
+OD-suppression window, from ON start, is
+`electrolysis_on_seconds + od_pause_after_electrolysis_seconds` (floored at
+0). Crucially the offset **may be negative**, down to and below
+`−electrolysis_on_seconds`: a negative value shortens or cancels the pause
+so OD resumes *during* electrolysis (e.g. `on=10, pause=−3` → OD resumes at
+t=7 s, 3 s before electrolysis ends; `pause=−10` → never paused, OD
+measured throughout). The pure timing core is extracted as the
+side-effect-free module function `od_pause_window_seconds(on, pause_after)`
+with a worked-example docstring, unit-tested across the negative edge
+cases. This OD pause is independent of, and composes with, the existing
+sparge OD pause.
+
+### Configurable LED channel (closes PR #16 / v0.7 reviewer flag)
+
+The electrolysis LED channel was hardcoded to `D`. It is now read from
+`[electropioreactor.config] led_channel` (default `D`, validated to one of
+A/B/C/D — an invalid label raises `ValueError` at job start). `_set_led`
+drives the configured channel; `_set_led_d` is gone. The PWM (CO₂) channel
+was already configurable via `[PWM] N = relay`; the README now documents
+both in a new **Hardware connections** section. `led_channel` is a hardware
+binding read once at init (not a live setting), so switching it needs a
+config edit + restart.
+
+### Settings, config, UI
+
+Three new live settings (`electrolysis_on_seconds`,
+`electrolysis_off_seconds`, `od_pause_after_electrolysis_seconds`) added to
+`published_settings` (all `persist: True`), the YAML descriptor, the CLI,
+`additional_config.ini`, and `scripts/patch-config-ini.py` defaults.
+`reset_to_defaults` now also resets the three new values. YAML/README
+D/4 references reworded to "the configured channel".
+
+### Tests
+
+`tests/test_electropioreactor.py` gains 36 tests (now 82 total in that
+file): the pure `od_pause_window_seconds` with all negative-pause edge
+cases, the ON/OFF cycle timer logic, continuous-mode (`off=0`), the
+OD-pause-during-electrolysis scheduling, the new setters/validators
+(`_non_negative`), configurable-LED-channel resolution + invalid-channel
+rejection at init, and electrolysis-cycle persistence/reset. The
+`patch-config-ini` test asserts the new defaults. All pass off-device
+(mocked, no hardware). Backwards-compat: with defaults (`led_channel=D`,
+`electrolysis_off_seconds=0`) behaviour is identical to v0.6.x (wrong for OD reading; corrected in v0.7.3).
+
+### Compatibility note
+
+This branch is based on `AEP-Plugin` (v0.6.7), not the parallel
+`configurable-led-channel` v0.7 spec branch; it folds that branch's
+configurable-LED-channel goal into this release so the cycling/OD-pause
+work ships channel-agnostic in one version.
+
+### Review fixes (pre-merge)
+
+A round of code review on the v0.7.0 work surfaced several correctness and
+hygiene issues, all fixed in this release (each paired with tests):
+
+- **OD-pause owner refcount (the named feature's core defect).** Sparge and
+  electrolysis both paused OD via a single shared `_od_paused` boolean, and
+  `_resume_od_reading` cleared it unconditionally — so a sparge resume could
+  re-enable OD *mid-electrolysis* (and vice-versa). OD pausing is now
+  reference-counted by owner (`_od_pausers`: `{'sparge', 'electrolysis'}`):
+  the first owner publishes SLEEPING, each resume releases only its own owner,
+  and OD is actually resumed only once the last owner releases. Regression
+  test added: electrolysis pause → sparge pause → sparge resume → OD stays
+  paused while electrolysis still holds.
+- **Dead "Reset to Defaults" toggle.** `reset_to_defaults` was absent from
+  `published_settings`, so the real `BackgroundJob._set_attr_from_message`
+  dispatcher silently dropped every UI `set` and the toggle was inert. Added
+  it as `{datatype: boolean, settable: True, persist: False}` (persist=False
+  so Pioreactor doesn't retain/replay the last True and fire a spurious reset
+  on restart); corrected the false "handled via MQTT" comment. Tests now
+  drive the real dispatcher path.
+- **Orphaned OD-resume timer mid-sparge.** A new sparge reassigned
+  `_od_resume_timer` without cancelling a pending one; the orphan fired
+  `_resume_od_reading` mid-new-sparge and escaped `_cancel_timers`. Now
+  cancelled before reassignment.
+- **LED MQTT connection churn.** `_set_led` called `led_intensity()` without
+  a `pubsub_client`, opening a fresh MQTT connect/disconnect on every call.
+  Now passes the job's `self.pub_client`.
+- **Non-finite floats reaching hardware / `threading.Timer`.** NaN/inf could
+  flow into `led_intensity` and into timer delays (a NaN delay silently kills
+  the timer thread, stopping the schedule). `_positive` / `_non_negative` and
+  the OD-pause offsets now reject non-finite via the existing `ValueError`
+  contract; `_clamp_power` maps non-finite to the safe floor `0.0` (callers
+  don't expect it to raise).
+- **Docs.** Rewrote the `CLAUDE.md` status note to state the PR-#615
+  transitional hot-patch flow was removed in v0.6.6 and the minimum Pioreactor
+  is 26.5.0 (`pio update` is the remedy on older units) — the code already
+  enforces the minimum, no system-patching. Added a maintainer release
+  checklist to the README so the expected-version strings get bumped alongside
+  `setup.py` / `__plugin_version__`.
+- **Test-harness rigor.** The conftest `getfloat` stub returned the caller's
+  own fallback, making config-reset assertions vacuous (a literal compared to
+  itself). It now injects distinct non-fallback values per `(section, key)`,
+  and the reset tests assert those injected values.
 
 ## v0.6.7 (2026-05-10) — preserve key case in config.ini writes
 

@@ -1,195 +1,148 @@
 # electroPioreactor-plugin
 
-A [Pioreactor](https://pioreactor.com) community plugin for the **[electroPioreactor](https://electroPioreactor.org)** – any Pioreactor fitted with an electrode pair driven by LED D and a CO₂ solenoid driven by PWM channel 4.
+A [Pioreactor](https://pioreactor.com) community plugin for the **[electroPioreactor](https://electroPioreactor.org)** – any Pioreactor fitted with an electrode pair driven by an LED channel and a CO₂ solenoid driven by a PWM channel.
 
 Provides a single background job, **electroPioreactor**, that:
 
-- Drives electrolysis (via LED channel D) at a user-defined power level (0–10 %, clamped at runtime to protect the electrodes).
-- Sparges CO₂ by periodically opening a CO₂ solenoid (PWM channel 4 relay) for a user-defined duration, at a user-defined interval in minutes.
-- Automatically pauses electrolysis (LED D → 0 %) for the duration of each sparge and resumes it immediately after.
-- Pauses the `od_reading` job for the duration of the sparge plus a user-defined settle window, so OD samples aren't contaminated by bubbles.
+- Drives electrolysis (via the configured LED channel, default **D**) at a user-defined power level (0–10 %, clamped at runtime to protect the electrodes).
+- **Cycles electrolysis ON/OFF** on a user-defined schedule (`electrolysis_on_seconds` ON, then `electrolysis_off_seconds` OFF, repeating). Set the OFF time to `0` for continuous electrolysis.
+- Sparges CO₂ by periodically opening a CO₂ solenoid (the configured PWM channel, default **4**) for a user-defined duration, at a user-defined interval in minutes.
+- Pauses electrolysis (LED → 0 %) for the duration of each sparge and resumes it immediately after.
+- When electrolysis cycles, pauses the `od_reading` job around each electrolysis ON phase (plus a user-defined window) and, independently, around each CO₂ sparge, so OD samples aren't contaminated by electrolysis or sparge bubbles. Continuous electrolysis (the default) has no gap to read in, so OD is paused only around sparges, as before v0.7.
 
-All four user-defined parameters are editable live from the Pioreactor web interface.
+All electrolysis and sparging parameters are editable live from the Pioreactor web interface. The LED and PWM channels are set in `config.ini` (they're hardware bindings, not runtime settings — see **Hardware connections**).
 
-### OD pausing
+### Electrolysis ON/OFF cycling
 
-`od_pause_after_sparge_seconds` (default `5.0`) is the number of seconds **after the CO₂ solenoid closes** before OD reading resumes – the bubble-clearance window. The total OD pause window is `sparge_duration_seconds + od_pause_after_sparge_seconds`, measured from sparge start.
+- `electrolysis_on_seconds` (default `60.0`) – how long electrolysis is ON each cycle. Must be > 0.
+- `electrolysis_off_seconds` (default `0.0`) – how long electrolysis is OFF between ON phases. Must be ≥ 0; `0` = continuous electrolysis (no OFF phase, identical to the pre-v0.7 behaviour).
 
-- **Positive** → pause OD for the full sparge plus N seconds of settle time. Typical.
-- **Zero** → resume OD the instant the solenoid closes.
-- **Negative** → resume OD part-way through the sparge (OD continues through the tail end of sparging).
-- **≤ −`sparge_duration_seconds`** → total pause ≤ 0; OD is not paused at all. Use a large negative (e.g. `-99999`) to disable the feature entirely.
+A mid-cycle change applies to the **next** phase, not the in-flight one.
+
+### OD pausing around electrolysis
+
+`od_pause_after_electrolysis_seconds` (default `5.0`) is the settle window **after each electrolysis ON phase ends** before OD reading resumes. It applies only when `electrolysis_off_seconds` is above `0`: continuous electrolysis never ends, so it does not pause OD (OD is read throughout, as before v0.7). To keep electrolysis bubbles out of OD readings, set an OFF time longer than this settle window. The effective OD-suppression window, measured from the start of the ON phase, is:
+
+```
+od_pause_window = electrolysis_on_seconds + od_pause_after_electrolysis_seconds   (floored at 0)
+```
+
+This value is **allowed to go negative**, down to (and below) −`electrolysis_on_seconds`. A negative value eats into the ON-phase pause, so OD resumes *before* electrolysis ends and OD is measured **during** electrolysis. Worked example with `electrolysis_on_seconds = 10`:
+
+| `od_pause_after_electrolysis_seconds` | window | behaviour |
+|---|---|---|
+| `+5` | `15` | OD off for the 10 s ON phase + 5 s settle after. Typical. |
+| `0`  | `10` | OD off for exactly the ON phase. |
+| `−3` | `7`  | OD resumes at t = 7 s, **3 s before electrolysis ends** → OD measured during the tail of electrolysis. |
+| `−10` (= −on) | `0` | OD never paused → OD measured throughout electrolysis. |
+| `−99999` | `0` | clamped to 0; disables this OD pause entirely. |
+
+OD reads in the gap between the end of the window and the next ON phase: `electrolysis_off_seconds − od_pause_after_electrolysis_seconds` seconds per cycle. If that is zero or less (e.g. ON 60 s, OFF 3 s, settle 5 s), OD never reads; the job logs a warning when this happens.
+
+### OD pausing around sparging
+
+`od_pause_after_sparge_seconds` (default `5.0`) is the bubble-clearance window **after the CO₂ solenoid closes** before OD reading resumes. The total OD pause window is `sparge_duration_seconds + od_pause_after_sparge_seconds`, measured from sparge start, and follows the same positive/zero/negative rules as the electrolysis OD pause (negatives down to −`sparge_duration_seconds` shorten or cancel the pause).
 
 Pause/resume is done by publishing `JobState.SLEEPING`/`READY` to `od_reading`'s `$state/set` topic. If `od_reading` isn't running, the publish is a no-op.
 
+## Hardware connections
+
+The electrode pair drives an LED channel and the CO₂ solenoid drives a PWM channel; **both are configurable** in `~/.pioreactor/config.ini` so the plugin doesn't assume a fixed channel is free (e.g. if other jobs occupy LED slots).
+
+- **LED channel** for the electrode pair: `[electropioreactor.config] led_channel = D` (one of `A`, `B`, `C`, `D`; default `D`). An invalid label makes the job refuse to start with a clear error.
+- **PWM channel** for the CO₂ solenoid: Pioreactor's own `[PWM] N = relay` label indirection. The plugin opens whichever PWM channel is labelled `relay`. The install flow sets `[PWM] 4 = relay`; to use a different channel, wire the solenoid there and set e.g. `[PWM] 2 = relay` instead.
+
 ## Hardware requirements
 
-- Pioreactor with an electrode pair wired to **LED channel D**.
-- CO₂ solenoid valve wired to **PWM channel 4**.
+- Pioreactor with an electrode pair wired to the configured **LED channel** (default D).
+- CO₂ solenoid valve wired to the configured **PWM channel** (default 4).
 - CO₂ supply (e.g. SodaStream) ideally with a needle valve for flow control.
 
 ## Installation
 
-Skip step 1 if your Pioreactor is already imaged and reachable on its network.
+### From the card
 
-### 1. (Optional) Flash a fresh Pioreactor image
+Needs a Pioreactor OS release with boot-partition plugin support (proposed at https://github.com/amy-bo/CustoPiZer/tree/bootfs-plugins and accepted by Pioreactor; until it ships, use the SSH route below).
 
-> ⚠️ **Warning**
-> Flashing wipes the SD card. Only do this if you are starting from scratch and have **no data on the unit you want to keep** – any experiments, calibrations, or local config on the SD card will be lost.
+1. Two changes to make while following Pioreactor's software set-up guide, which comes next:
+   - At its step 3, in **App Options**, switch off **Eject media when finished** (1) before you set the **Content Repository** (2), so the card stays mounted after the write.
 
-Follow [Pioreactor's official software-installation guide](https://docs.pioreactor.com/user-guide/software-set-up). The steps below mirror that doc verbatim; if Pi Imager's UI changes, that page is the source of truth.
+     ![Imager's App Options: 1 Eject media when finished switched off, 2 Content Repository Edit](docs/imager-app-options.png)
 
-On your Mac/Windows/Linux machine, install [Raspberry Pi Imager](https://www.raspberrypi.com/software/), then:
+   - At its step 15, for your leader, leave the Wi-Fi page blank if you can't add devices to your lab's Wi-Fi then reach them through it (typical at universities); the leader Pioreactor then makes its own network.
+   - Worker-only units: follow the same steps with a **Worker** image. Flash each worker with the step 15 Wi-Fi page set to network `pioreactor`, password `raspberry`, and at step 3 below do not drag the `local_access_point` file across. The plugin installs when you add the unit from the leader's **Inventory** page. Hotspot cluster: boot the leader first.
 
-1. Open Raspberry Pi Imager.
-2. Immediately click **App Options**.
-3. Click **Edit** next to **Content Repository**.
-4. Choose **Use Custom URL** and paste:
+   With those in mind, follow [Pioreactor's software set-up guide](https://docs.pioreactor.com/user-guide/software-set-up) up to **Write**, and come back here while the card writes.
+2. Download and unzip the [AEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-AEP-card-bundle.zip).
+3. When the write finishes, drag the `pioreactor` folder from the bundle onto the `bootfs` drive. If you left the Wi-Fi page blank (for the leader Pioreactor to make its own network), also drag across the `local_access_point` file, after changing `GB` in it to your country code\*. DO NOT drag it across for workers, or if you set your Pioreactors up to join a Wi-Fi network. If the card was ejected anyway, remove and reinsert it.
+4. Eject the card. One change to the rest of Pioreactor's guide: for a unit that makes its own Wi-Fi, join the network `pioreactor` (password `raspberry`) and open `http://pioreactor.local`. Then continue the guide from its step 18; the model dialog at its step 21 does not appear, because the bundle has set the model. **electroPioreactor** is under **Activities** on the unit's *Manage* page, and the precision temperature plugin is installed.
 
+   \* If your country code is not GB, open `local_access_point` in TextEdit/Notepad and replace `GB` with the ISO two-letter code (CA, IE, DE, AU, NZ, GL, US, etc.; see https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) and save; the file should contain just those two letters. Do nothing if you live in the United Kingdom of Great Britain and Northern Ireland (GB).
+
+MEP kit: the same steps with the [MEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-MEP-card-bundle.zip); there is no precision temperature plugin.
+
+If it is missing, put the card back in your computer: `pioreactor/plugins/failed/` on `bootfs` holds the wheel and a log of what went wrong.
+
+
+### Over SSH
+
+For a unit that is already running, or an OS release without boot-partition plugin support.
+
+1. Download and unzip the [AEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-AEP-card-bundle.zip) (or the [MEP card bundle](https://github.com/amy-bo/electroPioreactor/releases/latest/download/electroPioreactor-MEP-card-bundle.zip)) on your computer.
+2. In a terminal, from the unzipped `pioreactor/plugins` folder, with `<hostname>` replaced by the unit's name. Each command asks for the unit's password; answer `yes` if asked about a fingerprint.
+
+   ```bash
+   scp *.whl pioreactor@<hostname>.local:
+   ssh pioreactor@<hostname>.local 'for w in *.whl; do n=${w%%-*}; /opt/pioreactor/venv/bin/pio plugins install ${n//_/-} --source "$w"; done'
    ```
-   https://pioreactor.com/imager/os-list.json
-   ```
-5. Click **Apply & restart**.
-6. Choose your RPi model and click **Next** (Raspberry Pi Zero 2 W for current ed04 hardware).
-7. Choose the operating system **Pioreactor**
-8. Choose the **latest** OS on the list (at the top)
-9. Choose **Leader + Worker** and click **Next**. (Use **Worker** instead if this unit will join an existing cluster as a worker only; **Leader** if you want a leader that doesn't itself run experiments. For a stand-alone unit like ed04, pick Leader + Worker.)
-10. Insert your microSD card and select it as your **Storage** device.
-11. Input a unique hostname for this unit (e.g. `ed04`). **Do not use `pioreactor` or `raspberrypi`** – those names are reserved and will break mDNS resolution. Click **Next**.
-12. Change localization preferences (time zone, keyboard layout) and click **Next**.
-13. enter **Username**: `pioreactor` (do not change – the Pioreactor image hardcodes this username and several plugin install paths assume it).
-14. enter **Password**: Pioreactor's docs use `raspberry`; pick something stronger for any unit that will run real experiments. Enter password again and click **Next**.
-15. Enter your **SSID** and **WiFi password** (optional if using Ethernet - note Raspberry Pi Zero's do not have Ethernet so WiFi is required). Click **Next**.
-16. Confirm **Enable SSH** is active and **Use password authentication** is selected. Click **Next**.
-17. Click **Write** to begin imaging. Accept any permission prompts. Writing takes up to 5 minutes.
 
-When the write finishes, eject the card and insert it into the Raspberry Pi (HAT attached, power unplugged). The microSD slot is on the PWM side. Plug power in; after a few minutes the Pioreactor HAT will briefly blink a blue LED to indicate first-boot is complete.
+   The second command installs every wheel in the folder, naming each plugin from its file.
 
-In a browser, navigate to `http://<hostname>.local` (e.g. `http://ed04.local`) – the Pioreactor lighttpd web UI loads unauthenticated when ready. When the UI loads you'll be prompted by an **Update Pioreactor model** dialog: select the correct model and hardware version, then click **Save**.
+3. Refresh the unit's web interface: **electroPioreactor** is under **Activities** on the *Manage* page.
 
-> ℹ️ **The Pioreactor image is headless by design.** A connected monitor will stay blank even on a fully working unit (HDMI output, ACT LED, and boot splash are all disabled in `/boot/firmware/config.txt`). Don't troubleshoot from screen output – verify boot via the brief blue LED flash, by `ping <hostname>.local` from another device on the same network, or by the web UI loading.
+## Configuration
 
-### 2. SSH in and install the plugin
+Installation sets these defaults:
 
-**On your Mac/Windows/Linux shell**, open the SSH session:
+```ini
+[PWM]
+4=relay
 
-```bash
-ssh pioreactor@<hostname>.local
+[electropioreactor.config]
+led_channel=D                            ; LED channel for the electrode pair (A/B/C/D)
+electrolysis_power=2.5                   ; LED intensity (0–10 %, clamped at runtime)
+electrolysis_on_seconds=60.0             ; electrolysis ON time per cycle (s, > 0)
+electrolysis_off_seconds=0.0             ; electrolysis OFF time per cycle (s, >= 0; 0 = continuous)
+od_pause_after_electrolysis_seconds=5.0  ; OD settle window after electrolysis ON ends (s); negative allowed
+sparge_duration_seconds=10.0             ; solenoid open time per cycle (s)
+sparge_interval_minutes=60.0             ; cycle frequency (min)
+od_pause_after_sparge_seconds=5.0        ; OD settle window after sparge ends (s); negative allowed
 ```
 
-Type `yes` to accept the host fingerprint on first connect, then enter the password you set in step 1.
+Change the numeric values on the Pioreactor **Configuration** page, or live in the job's **Settings** panel while it runs; a new value applies from the next phase or cycle. `led_channel` is a hardware binding read at job start: change it in `config.ini` and restart the job.
 
-**Inside the SSH session on the Pi**:
+## Starting the job
 
-```bash
-cd ~
-```
+In the web interface: open **Activities** on the *Manage* page and start **electroPioreactor**. Every numeric setting can be changed live from **Settings** without restarting.
 
-```bash
-sudo apt update && sudo apt install -y git
-```
+From the command line:
 
 ```bash
-git clone https://github.com/amy-bo/electroPioreactor.git
+pio run electropioreactor \
+    --electrolysis-power 2.5 \
+    --electrolysis-on-seconds 60 \
+    --electrolysis-off-seconds 0 \
+    --od-pause-after-electrolysis-seconds 5 \
+    --sparge-duration-seconds 10 \
+    --sparge-interval-minutes 60 \
+    --od-pause-after-sparge-seconds 5
 ```
 
-If `electroPioreactor` is already on this unit from an earlier install, the clone will stop with "already exists". Bring the existing copy up to date instead:
+## Pioreactor version
 
-```bash
-git -C electroPioreactor checkout main && git -C electroPioreactor pull
-```
+Requires Pioreactor 26.5.0 or later. On an older unit, run `pio update` first.
 
-```bash
-/opt/pioreactor/venv/bin/pip install ./electroPioreactor/AEP-Plugin
-```
-
-```bash
-/opt/pioreactor/venv/bin/pip show pioreactor-electropioreactor-plugin | grep Version
-```
-
-The last line should print `Version: 0.6.7` (or later).
-
-> ℹ️ **Which units need which steps.** A unit must have joined a cluster before it has a `config.ini`, so add it from the leader's **Inventory** before running any of steps 3-6 on it. After that: run **step 3 on every unit that will run electroPioreactor**, workers included - each Pioreactor serves its own job descriptors from its own disk, and nothing copies them between units. Run **step 4 on the leader only** - `config.ini` is leader-owned and any worker-side edit is overwritten by the next sync; if your workers were already in the cluster when you ran it, push the change out with `pios sync-configs --shared`. **Steps 5 and 6 are safe on any unit** - workers serve `/unit_api` too, so step 6's checks are how you confirm a worker install landed.
-
-### 3. Deploy the UI job descriptor
-
-```bash
-bash /home/pioreactor/electroPioreactor/AEP-Plugin/scripts/deploy-ui-yaml.sh
-```
-
-### 4. Patch `config.ini` (idempotent)
-
-Adds `[PWM] 4=relay` and the four `[electropioreactor.config]` defaults. Re-runs are safe; existing keys and values are preserved (comments and blank lines in `config.ini` are not - the file is rewritten by `configparser`).
-
-A stock Pioreactor image ships `[PWM] 4=waste`. Free channel 4 first on the **Configuration** page, or the script refuses and exits without changing anything.
-
-```bash
-/opt/pioreactor/venv/bin/python /home/pioreactor/electroPioreactor/AEP-Plugin/scripts/patch-config-ini.py
-```
-
-See **Configuration** below for what these values mean.
-
-### 5. Restart `lighttpd`
-
-```bash
-sudo systemctl restart lighttpd
-```
-
-### 6. Verify
-
-```bash
-export DOT_PIOREACTOR=/home/pioreactor/.pioreactor
-```
-
-```bash
-/opt/pioreactor/venv/bin/pio plugins list 2>&1 | grep electro
-```
-
-Expected: `pioreactor-electropioreactor-plugin==0.6.7` (or later).
-
-```bash
-ls -la /home/pioreactor/.pioreactor/plugins/ui/jobs/20_electropioreactor.yaml
-```
-
-Expected: file present, owned by `pioreactor`. (`pio plugins install` also puts the group to `www-data`; `deploy-ui-yaml.sh` leaves your default group, which lighttpd can still read.)
-
-```bash
-curl -s http://localhost/unit_api/jobs/descriptors | grep -o '"job_name": *"electropioreactor"' | wc -l
-```
-
-Expected: `1`. Run this on each unit that will run the job - the endpoint reports only that unit's own descriptors. (Count occurrences, not lines: the endpoint returns the whole payload on one line, so `grep -c` would print `1` however many times the job appears.)
-
-```bash
-grep -E -A6 '^\[(PWM|electropioreactor\.config)\]' /home/pioreactor/.pioreactor/config.ini
-```
-
-Expected: `[PWM]` contains `4 = relay`, and `[electropioreactor.config]` lists the four settings. Step 4 exits without writing if it finds PWM 4 already assigned to something else, and nothing between the steps stops you continuing past that - so check the file rather than assuming.
-
-Then in your browser, hard-refresh `http://<hostname>.local/` (Ctrl/Cmd+Shift+R), navigate to **Pioreactors → `<hostname>` → Manage**, and **electroPioreactor** should appear under **Activities**.
-
-## Other installation methods
-
-### From PyPI (future)
-
-Once the plugin is published to PyPI, installation will be a one-liner:
-
-```bash
-pio plugins install pioreactor-electropioreactor-plugin
-```
-
-Or on the whole cluster:
-
-```bash
-pios plugins install pioreactor-electropioreactor-plugin
-```
-
-`pio plugins install` accepts a `--source` archive URL as well as a PyPI name, and unlike the manual steps above it deploys the UI descriptor and merges this plugin's `additional_config.ini` for you, on leaders and workers alike. Worth switching the documented install to once the archive layout has been tested on a unit.
-
-### Pre-built OS image (future)
-
-A Raspberry Pi OS image with the plugin pre-installed and pre-configured is published from the `electroPioreactorOS` branch of this repo. See `electropioreactor-image/README.md` on that branch, or flash via Raspberry Pi Imager using the custom URL `https://amy-bo.github.io/electroPioreactor/os-list.json` (available after the OS branch is merged and the first release is cut).
-
-### Local development (off-device)
+## Development
 
 ```bash
 git clone https://github.com/amy-bo/electroPioreactor.git
@@ -198,56 +151,16 @@ pip install -e ".[dev]"
 pytest tests/                   # off-device, no Pi needed
 ```
 
-## Configuration
-
-The install flow above writes the following to `~/.pioreactor/config.ini`:
-
-```ini
-[PWM]
-4=relay
-
-[electropioreactor.config]
-electrolysis_power=2.5
-sparge_duration_seconds=10.0
-sparge_interval_minutes=60.0
-od_pause_after_sparge_seconds=5.0
-```
-
-- `electrolysis_power` - LED D intensity, 0-10 %, clamped at runtime.
-- `sparge_duration_seconds` - solenoid open time per cycle, in seconds.
-- `sparge_interval_minutes` - cycle frequency, in minutes.
-- `od_pause_after_sparge_seconds` - OD settle window after the sparge ends, in seconds; negative values allowed.
-
-Keep those descriptions out of the file itself. `configparser` does not strip inline `;` comments, so a trailing comment becomes part of the value, and a `%` inside one breaks interpolation for the whole file - every `pio` command on the unit then fails at config load, not just this plugin.
-
-Adjust these values in the Pioreactor **Configuration** page, or change them live via the **Settings** panel on the *Manage* screen while the job is running.
-
-`od_pause_after_sparge_seconds` can be edited live, but the new value only takes effect on the **next** sparge cycle – an in-flight OD pause uses the value that was set when that sparge began.
-
-## Starting the job
-
-Via the web interface: open the **Activities** tab on the *Manage* screen and start **electroPioreactor**. All four parameters can then be adjusted live from the **Settings** panel without restarting the job.
-
-Via CLI. Pioreactor sets `DOT_PIOREACTOR` for its own services but an interactive SSH shell does not have it, and the job needs it at start-up, so export it first in any shell you launch the job from:
-
-```bash
-export DOT_PIOREACTOR=/home/pioreactor/.pioreactor
-```
-
-```bash
-pio run electropioreactor \
-    --electrolysis-power 2.5 \
-    --sparge-duration-seconds 10 \
-    --sparge-interval-minutes 60 \
-    --od-pause-after-sparge-seconds 5
-```
-
-## Pioreactor version compatibility
-
-Requires **Pioreactor ≥ 26.5.0** (released 2026-05-07). Earlier releases lack [PR #615](https://github.com/Pioreactor/pioreactor/pull/615) (merged 2026-04-30), without which the plugin's Advanced modal would need a hard-refresh after each Stop to display fresh values. The plugin's own data-layer persistence bug (which actually *wiped* values from MQTT/SQLite) was fixed in v0.6.1.
-
-If your unit is on an older Pioreactor, run `pio update` before installing this plugin.
-
 ## Contributing
 
 Issues and pull requests welcome at <https://github.com/amy-bo/electroPioreactor>.
+
+### Release checklist (maintainers)
+
+When bumping the plugin version, update it in the same commit in:
+
+- `setup.py` (`version=`)
+- `pioreactor_electropioreactor_plugin/electropioreactor.py` (`__plugin_version__`)
+- `CHANGELOG.md`
+
+Then publish a GitHub release, so the `card-bundle` workflow attaches fresh card bundles with the new wheel.
